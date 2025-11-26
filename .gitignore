@@ -1,0 +1,30 @@
+# --- Virtuelle Umgebungen ---
+.venv/
+venv/
+env/
+
+# --- Python ---
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pdb
+*.egg-info/
+dist/
+build/
+.eggs/
+*.spec
+
+# --- VS Code ---
+.vscode/
+
+# --- MacOS ---
+.DS_Store
+
+# --- Logs ---
+*.log
+
+# --- Cache / Temp ---
+.cache/
+.tmp/
+.pytest_cache/
