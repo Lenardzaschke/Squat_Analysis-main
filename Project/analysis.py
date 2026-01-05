@@ -1,170 +1,157 @@
-# analysis.py
-"""
-analysis.py
-
-This module contains the squat evaluation logic.
-
-Goal:
-- Use ArUco marker positions (pixel coordinates) to estimate squat "depth"
-- Detect a valid squat repetition using a simple state machine:
-    above -> below -> above  => 1 valid rep
-- Provide rep count + "new rep" event for triggering a sound in the GUI
-
-Important:
-- This version uses the Y-position of ONE marker (e.g. hip marker) as the depth signal.
-- In an image, Y usually increases downward:
-    smaller Y = higher position
-    larger Y  = lower position
-"""
-
 from dataclasses import dataclass
-from typing import Dict, Tuple, Optional, Any
+from typing import Dict, Any, Optional, Tuple
+import math
 
 
 @dataclass
-class SquatResult:
-    """Returned by SquatAnalyzer.update() each frame."""
+class AngleResult:
+    femur_angle_deg: Optional[float]
+    knee_angle_deg: Optional[float]
     rep_count: int
     new_rep: bool
-    depth: Optional[float]
     state: str
     status_text: str
 
 
-class SquatAnalyzer:
+def _vec(a: Tuple[float, float], b: Tuple[float, float]) -> Tuple[float, float]:
+    return (b[0] - a[0], b[1] - a[1])
+
+
+def _norm(v: Tuple[float, float]) -> float:
+    return math.hypot(v[0], v[1])
+
+
+def _angle_deg(u: Tuple[float, float], v: Tuple[float, float]) -> Optional[float]:
+    nu, nv = _norm(u), _norm(v)
+    if nu == 0 or nv == 0:
+        return None
+    dot = u[0] * v[0] + u[1] * v[1]
+    c = max(-1.0, min(1.0, dot / (nu * nv)))
+    return math.degrees(math.acos(c))
+
+
+class AngleAnalyzer:
     """
-    SquatAnalyzer evaluates squat repetitions based on marker positions.
+    Computes femur angle w.r.t. floor and knee angle.
+    Additionally counts valid squat reps based on knee angle thresholds.
 
-    Markers format (as returned by camera.py in our earlier setup):
-        markers = {
-            marker_id: {
-                "center": (cx, cy),
-                "corners": np.ndarray shape (4,2)
-            },
-            ...
-        }
-
-    Basic approach here:
-    - Track the hip marker Y coordinate as a proxy for squat depth.
-    - Use two thresholds:
-        * top_threshold: when hip_y is ABOVE (smaller) this value, athlete is considered "standing"
-        * bottom_threshold: when hip_y is BELOW (greater) this value, athlete is considered "deep enough"
-    - A valid rep is counted once the athlete:
-        standing -> deep enough -> standing again
+    Rep definition (default):
+      standing (knee_angle >= top_knee_deg) -> deep (knee_angle <= bottom_knee_deg) -> standing
     """
 
     def __init__(
         self,
-        hip_id: int = 0,
-        top_threshold: int = 200,
-        bottom_threshold: int = 350,
-        min_frames_below: int = 1,
-        require_marker: bool = True,
+        hip_id: int,
+        knee_id: int,
+        ankle_id: int,
+        floor_id1: Optional[int] = None,
+        floor_id2: Optional[int] = None,
+        require_all_markers: bool = True,
+
+        # --- Rep counting parameters (knee-angle based) ---
+        top_knee_deg: float = 165.0,        # "standing" threshold
+        bottom_knee_deg: float = 100.0,     # "deep enough" threshold
+        min_frames_below: int = 2,          # noise rejection
+        min_frames_above: int = 2,          # noise rejection
     ):
-        """
-        Args:
-            hip_id: ArUco ID used as the main depth marker (e.g., on the hip/pelvis).
-            top_threshold: Pixel Y threshold for "standing" (smaller Y = higher).
-            bottom_threshold: Pixel Y threshold for "deep enough" (larger Y = lower).
-            min_frames_below: How many consecutive frames must be below bottom_threshold
-                              before accepting the "below" state. Helps reject noise.
-            require_marker: If True and hip marker is missing, no update is performed.
-        """
         self.hip_id = hip_id
-        self.top_threshold = top_threshold
-        self.bottom_threshold = bottom_threshold
+        self.knee_id = knee_id
+        self.ankle_id = ankle_id
+        self.floor_id1 = floor_id1
+        self.floor_id2 = floor_id2
+        self.require_all_markers = require_all_markers
+
+        # rep counting config
+        self.top_knee_deg = float(top_knee_deg)
+        self.bottom_knee_deg = float(bottom_knee_deg)
         self.min_frames_below = max(1, int(min_frames_below))
-        self.require_marker = require_marker
+        self.min_frames_above = max(1, int(min_frames_above))
 
-        # State machine variables
-        self.state = "above"  # "above" or "below"
+        # rep counting state
+        self.state = "above"  # above (=standing) or below (=deep)
         self.rep_count = 0
+        self._below_counter = 0
+        self._above_counter = 0
 
-        # Noise handling
-        self._below_frame_counter = 0
+    def reset(self) -> None:
+        self.state = "above"
+        self.rep_count = 0
+        self._below_counter = 0
+        self._above_counter = 0
 
-    def update(self, markers: Dict[int, Dict[str, Any]]) -> SquatResult:
-        """
-        Update squat state based on the current frame's marker detections.
+    def update(self, markers: Dict[int, Dict[str, Any]]) -> AngleResult:
+        # Require hip/knee/ankle markers for angles
+        missing = [mid for mid in (self.hip_id, self.knee_id, self.ankle_id) if mid not in markers]
+        if missing:
+            status = f"Missing markers: {missing}"
+            return AngleResult(None, None, self.rep_count, False, self.state, status)
 
-        Args:
-            markers: Dictionary of detected markers (see class docstring).
+        hip = markers[self.hip_id]["center"]
+        knee = markers[self.knee_id]["center"]
+        ankle = markers[self.ankle_id]["center"]
 
-        Returns:
-            SquatResult containing:
-              - rep_count: total reps counted
-              - new_rep: True if a rep was completed on this frame
-              - depth: current depth value (hip_y) or None if unavailable
-              - state: current internal state ("above"/"below")
-              - status_text: human-readable status for GUI
-        """
-        # If the hip marker is not visible, we cannot measure depth
-        if self.hip_id not in markers:
-            if self.require_marker:
-                return SquatResult(
-                    rep_count=self.rep_count,
-                    new_rep=False,
-                    depth=None,
-                    state=self.state,
-                    status_text="Hip marker not detected",
-                )
-            # If marker is optional, we could keep last state without changing it
-            return SquatResult(
-                rep_count=self.rep_count,
-                new_rep=False,
-                depth=None,
-                state=self.state,
-                status_text="No marker (ignored)",
-            )
+        hip = (float(hip[0]), float(hip[1]))
+        knee = (float(knee[0]), float(knee[1]))
+        ankle = (float(ankle[0]), float(ankle[1]))
 
-        # Extract hip marker center
-        _, hip_y = markers[self.hip_id]["center"]
-        depth = float(hip_y)
+        femur = _vec(hip, knee)     # hip -> knee
+        tibia = _vec(ankle, knee)   # ankle -> knee
 
+        # Floor direction (fallback: image x-axis)
+        floor_dir = (1.0, 0.0)
+        floor_status = "floor:FALLBACK"
+        if self.floor_id1 is not None and self.floor_id2 is not None:
+            if self.floor_id1 in markers and self.floor_id2 in markers:
+                f1 = markers[self.floor_id1]["center"]
+                f2 = markers[self.floor_id2]["center"]
+                f1 = (float(f1[0]), float(f1[1]))
+                f2 = (float(f2[0]), float(f2[1]))
+                floor_dir = _vec(f1, f2)
+                floor_status = "floor:OK"
+
+        femur_angle = _angle_deg(femur, floor_dir)
+        knee_angle = _angle_deg(femur, tibia)
+
+        if femur_angle is None or knee_angle is None:
+            return AngleResult(femur_angle, knee_angle, self.rep_count, False, self.state,
+                               "Angle computation failed (zero-length vector)")
+
+        # --------------------
+        # Rep counting (knee angle)
+        # --------------------
         new_rep = False
-        status_text = ""
+        rep_status = ""
 
-        # --- State machine logic ---
         if self.state == "above":
-            # Athlete is considered "standing" (or not deep enough yet).
-            # We wait until hip_y is "low enough" (>= bottom_threshold) for enough frames.
-            if hip_y >= self.bottom_threshold:
-                self._below_frame_counter += 1
+            # Wait until deep enough for enough frames
+            if knee_angle <= self.bottom_knee_deg:
+                self._below_counter += 1
             else:
-                self._below_frame_counter = 0
+                self._below_counter = 0
 
-            if self._below_frame_counter >= self.min_frames_below:
+            if self._below_counter >= self.min_frames_below:
                 self.state = "below"
-                self._below_frame_counter = 0  # reset once we switch
-                status_text = "Reached depth (below)"
+                self._below_counter = 0
+                self._above_counter = 0
+                rep_status = "Reached depth"
             else:
-                status_text = "Above / going down"
+                rep_status = "Standing / going down"
 
         elif self.state == "below":
-            # Athlete is deep enough; we wait until they come back up to standing.
-            if hip_y <= self.top_threshold:
+            # Wait until standing again for enough frames
+            if knee_angle >= self.top_knee_deg:
+                self._above_counter += 1
+            else:
+                self._above_counter = 0
+
+            if self._above_counter >= self.min_frames_above:
                 self.state = "above"
                 self.rep_count += 1
                 new_rep = True
-                status_text = "Rep completed!"
+                self._above_counter = 0
+                rep_status = "Rep completed"
             else:
-                status_text = "Below / coming up"
+                rep_status = "Deep / coming up"
 
-        else:
-            # Safety fallback (should not happen)
-            self.state = "above"
-            status_text = "State reset"
-
-        return SquatResult(
-            rep_count=self.rep_count,
-            new_rep=new_rep,
-            depth=depth,
-            state=self.state,
-            status_text=status_text,
-        )
-
-    def reset(self) -> None:
-        """Reset repetition counter and internal state."""
-        self.state = "above"
-        self.rep_count = 0
-        self._below_frame_counter = 0
+        status = f"OK ({floor_status}, {rep_status})"
+        return AngleResult(femur_angle, knee_angle, self.rep_count, new_rep, self.state, status)

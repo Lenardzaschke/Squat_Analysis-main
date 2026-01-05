@@ -1,4 +1,4 @@
-# gui_app.py
+from logging import root
 import tkinter as tk
 from tkinter import ttk
 from PIL import Image, ImageTk
@@ -7,22 +7,21 @@ import cv2
 
 class SquatApp(tk.Tk):
     """
-    Tkinter GUI:
+    Tkinter GUI for angle measurement:
     - Displays live camera feed
-    - Shows rep count + status text
-    - Start/Stop button (pauses processing but can keep showing last frame)
-    - Optional live threshold tuning via sliders
+    - Shows femur angle (w.r.t. floor) and knee angle
+    - Start/Stop button (pauses processing but keeps showing frames)
     """
 
     def __init__(self, camera, analyzer, sound_module, fps: int = 30):
         super().__init__()
-        self.title("Squat Analyzer")
+        self.title("Squat Angle Analyzer")
         self.camera = camera
         self.analyzer = analyzer
         self.sound_module = sound_module
 
         self.delay_ms = max(1, int(1000 / fps))
-        self.running = True  # controls whether we process + count reps
+        self.running = True
 
         # --- Layout ---
         root = ttk.Frame(self, padding=10)
@@ -32,37 +31,29 @@ class SquatApp(tk.Tk):
         self.video_label = ttk.Label(root)
         self.video_label.grid(row=0, column=0, columnspan=3, sticky="nsew")
 
-        # Info labels
-        self.rep_var = tk.StringVar(value="Reps: 0")
-        self.state_var = tk.StringVar(value="State: -")
+        # Info labels (angles)
+        self.femur_var = tk.StringVar(value="Femur angle: -")
+        self.knee_var = tk.StringVar(value="Knee angle: -")
         self.status_var = tk.StringVar(value="Status: -")
 
-        ttk.Label(root, textvariable=self.rep_var, font=("Arial", 16)).grid(row=1, column=0, sticky="w", pady=(10, 0))
-        ttk.Label(root, textvariable=self.state_var, font=("Arial", 12)).grid(row=1, column=1, sticky="w", pady=(10, 0))
+        ttk.Label(root, textvariable=self.femur_var, font=("Arial", 16)).grid(row=1, column=0, sticky="w", pady=(10, 0))
+        ttk.Label(root, textvariable=self.knee_var, font=("Arial", 16)).grid(row=1, column=1, sticky="w", pady=(10, 0))
         ttk.Label(root, textvariable=self.status_var, font=("Arial", 12)).grid(row=1, column=2, sticky="w", pady=(10, 0))
 
-        # Controls
-        self.start_stop_btn = ttk.Button(root, text="Pause", command=self.toggle_running)
-        self.start_stop_btn.grid(row=2, column=0, sticky="w", pady=10)
+        self.rep_var = tk.StringVar(value="Reps: 0")
+        self.state_var = tk.StringVar(value="State: -")
 
-        self.reset_btn = ttk.Button(root, text="Reset Reps", command=self.reset_reps)
-        self.reset_btn.grid(row=2, column=1, sticky="w", pady=10)
+        ttk.Label(root, textvariable=self.rep_var, font=("Arial", 16)).grid(row=2, column=0, sticky="w", pady=(5, 0))
+        ttk.Label(root, textvariable=self.state_var, font=("Arial", 12)).grid(row=2, column=1, sticky="w", pady=(5, 0))
 
-        self.quit_btn = ttk.Button(root, text="Quit", command=self.on_close)
-        self.quit_btn.grid(row=2, column=2, sticky="e", pady=10)
+        # Controls 
+        self.start_stop_btn = ttk.Button(root, text="Pause", command=self.toggle_running) 
+        self.start_stop_btn.grid(row=3, column=0, sticky="w", pady=10) 
+        self.reset_btn = ttk.Button(root, text="Reset Reps", command=self.reset_reps) 
+        self.reset_btn.grid(row=3, column=1, sticky="w", pady=10) 
+        self.quit_btn = ttk.Button(root, text="Quit", command=self.on_close) 
+        self.quit_btn.grid(row=3, column=2, sticky="e", pady=10)
 
-        # --- Optional: Live threshold tuning ---
-        # This is super useful later for quick calibration without changing code.
-        self.top_slider = ttk.Scale(
-            root, from_=0, to=800, value=self.analyzer.top_threshold, command=self._on_top_change
-        )
-        self.bottom_slider = ttk.Scale(
-            root, from_=0, to=800, value=self.analyzer.bottom_threshold, command=self._on_bottom_change
-        )
-        ttk.Label(root, text="Top threshold (standing)").grid(row=3, column=0, sticky="w")
-        self.top_slider.grid(row=3, column=1, columnspan=2, sticky="ew")
-        ttk.Label(root, text="Bottom threshold (depth)").grid(row=4, column=0, sticky="w")
-        self.bottom_slider.grid(row=4, column=1, columnspan=2, sticky="ew")
 
         # Stretching
         root.columnconfigure(0, weight=1)
@@ -86,12 +77,6 @@ class SquatApp(tk.Tk):
         self.state_var.set("State: -")
         self.status_var.set("Status: -")
 
-    def _on_top_change(self, _):
-        # ttk.Scale returns strings via callback; cast safely
-        self.analyzer.top_threshold = int(float(self.top_slider.get()))
-
-    def _on_bottom_change(self, _):
-        self.analyzer.bottom_threshold = int(float(self.bottom_slider.get()))
 
     def update_loop(self):
         frame, markers = self.camera.get_frame_and_markers()
@@ -100,19 +85,113 @@ class SquatApp(tk.Tk):
             if self.running:
                 result = self.analyzer.update(markers)
 
-                # Trigger sound only when a new rep is detected
+                                # Sound bei neuer Rep
                 if result.new_rep:
                     self.sound_module.play_valid_squat_sound()
 
                 self.rep_var.set(f"Reps: {result.rep_count}")
                 self.state_var.set(f"State: {result.state}")
+
+
+                # ---------- VECTOR VISUALIZATION ----------
+
+                # Femur vector: Hip -> Knee
+                hip_id = self.analyzer.hip_id
+                knee_id = self.analyzer.knee_id
+
+                if hip_id in markers and knee_id in markers:
+                    hip = markers[hip_id]["center"]
+                    knee = markers[knee_id]["center"]
+
+                    hip = (int(hip[0]), int(hip[1]))
+                    knee = (int(knee[0]), int(knee[1]))
+
+                    # draw femur vector (green)
+                    cv2.arrowedLine(
+                        frame,
+                        hip,
+                        knee,
+                        color=(0, 255, 0),
+                        thickness=3,
+                        tipLength=0.2
+                    )
+                    cv2.putText(frame, "Femur", hip,
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                    
+                    # ---------- TIBIA VECTOR (Knee -> Ankle) ----------
+
+                    knee_id = self.analyzer.knee_id
+                    ankle_id = self.analyzer.ankle_id
+
+                    if knee_id in markers and ankle_id in markers:
+                        knee = markers[knee_id]["center"]
+                        ankle = markers[ankle_id]["center"]
+
+                        knee = (int(knee[0]), int(knee[1]))
+                        ankle = (int(ankle[0]), int(ankle[1]))
+
+                        # draw tibia vector (red)
+                        cv2.arrowedLine(
+                            frame,
+                            knee,
+                            ankle,
+                            color=(0, 0, 255),
+                            thickness=3,
+                            tipLength=0.2
+                        )
+
+                        cv2.putText(
+                            frame,
+                            "Tibia",
+                            knee,
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.6,
+                            (0, 0, 255),
+                            2
+                        )
+
+
+                # Floor vector: Floor1 -> Floor2 (if available)
+                fid1 = self.analyzer.floor_id1
+                fid2 = self.analyzer.floor_id2
+
+                if fid1 is not None and fid2 is not None:
+                    if fid1 in markers and fid2 in markers:
+                        f1 = markers[fid1]["center"]
+                        f2 = markers[fid2]["center"]
+
+                        f1 = (int(f1[0]), int(f1[1]))
+                        f2 = (int(f2[0]), int(f2[1]))
+
+                        # draw floor vector (blue)
+                        cv2.arrowedLine(
+                            frame,
+                            f1,
+                            f2,
+                            color=(255, 0, 0),
+                            thickness=3,
+                            tipLength=0.2
+                        )
+                        cv2.putText(frame, "Floor", f1,
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 0), 2)
+
+
+                if result.femur_angle_deg is not None:
+                    self.femur_var.set(f"Femur angle: {result.femur_angle_deg:.1f}°")
+                else:
+                    self.femur_var.set("Femur angle: -")
+
+                if result.knee_angle_deg is not None:
+                    self.knee_var.set(f"Knee angle: {result.knee_angle_deg:.1f}°")
+                else:
+                    self.knee_var.set("Knee angle: -")
+
                 self.status_var.set(f"Status: {result.status_text}")
 
-                # Optional: show visible marker IDs in the frame
+                # show visible marker IDs
                 cv2.putText(frame, f"IDs: {list(markers.keys())}", (20, 30),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
             else:
-                # When paused: still show camera image, but don't count reps
                 cv2.putText(frame, "PAUSED", (20, 30),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
 
@@ -121,7 +200,6 @@ class SquatApp(tk.Tk):
             img = Image.fromarray(frame_rgb)
             imgtk = ImageTk.PhotoImage(image=img)
 
-            # Keep reference to prevent garbage collection
             self.video_label.imgtk = imgtk
             self.video_label.configure(image=imgtk)
 
