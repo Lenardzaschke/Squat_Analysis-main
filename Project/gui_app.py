@@ -41,10 +41,9 @@ class SquatApp(tk.Tk):
         ttk.Label(root, textvariable=self.status_var, font=("Arial", 12)).grid(row=1, column=2, sticky="w", pady=(10, 0))
 
         self.rep_var = tk.StringVar(value="Reps: 0")
-        self.state_var = tk.StringVar(value="State: -")
 
         ttk.Label(root, textvariable=self.rep_var, font=("Arial", 16)).grid(row=2, column=0, sticky="w", pady=(5, 0))
-        ttk.Label(root, textvariable=self.state_var, font=("Arial", 12)).grid(row=2, column=1, sticky="w", pady=(5, 0))
+
 
         # Controls 
         self.start_stop_btn = ttk.Button(root, text="Pause", command=self.toggle_running) 
@@ -74,7 +73,6 @@ class SquatApp(tk.Tk):
     def reset_reps(self):
         self.analyzer.reset()
         self.rep_var.set("Reps: 0")
-        self.state_var.set("State: -")
         self.status_var.set("Status: -")
 
 
@@ -90,7 +88,7 @@ class SquatApp(tk.Tk):
                     self.sound_module.play_valid_squat_sound()
 
                 self.rep_var.set(f"Reps: {result.rep_count}")
-                self.state_var.set(f"State: {result.state}")
+                
 
 
                 # ---------- VECTOR VISUALIZATION ----------
