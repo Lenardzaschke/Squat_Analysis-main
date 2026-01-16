@@ -5,22 +5,22 @@ import math
 
 @dataclass
 class AngleResult:
-    femur_angle_deg: Optional[float]   # signed angle wrt floor (deg)
-    knee_angle_deg: Optional[float]
-    rep_count: int
-    new_rep: bool
-    state: str
+    femur_angle_deg: Optional[float]   # signed angle w.r.t. floor (deg)
+    knee_angle_deg: Optional[float]    # unsigned knee angle (deg)
+    rep_count: int                 # total counted reps
+    new_rep: bool                  # whether a new rep was counted this frame
+    state: str                     # current state ("above" or "below")
     status_text: str
 
-
+# Vector from a to b
 def _vec(a: Tuple[float, float], b: Tuple[float, float]) -> Tuple[float, float]:
     return (b[0] - a[0], b[1] - a[1])
 
-
+# Vector norm
 def _norm(v: Tuple[float, float]) -> float:
     return math.hypot(v[0], v[1])
 
-
+# Compute unsigned angle in [0, 180]. Used here for knee angle.
 def _angle_deg(u: Tuple[float, float], v: Tuple[float, float]) -> Optional[float]:
     """Unsigned angle in [0, 180]. Used here for knee angle."""
     nu, nv = _norm(u), _norm(v)
@@ -30,7 +30,7 @@ def _angle_deg(u: Tuple[float, float], v: Tuple[float, float]) -> Optional[float
     c = max(-1.0, min(1.0, dot / (nu * nv)))
     return math.degrees(math.acos(c))
 
-
+# Compute signed angle in [-180, +180]. Used here for femur angle w.r.t. floor.
 def _signed_angle_deg(ref: Tuple[float, float], vec: Tuple[float, float]) -> Optional[float]:
     """
     Signed angle from 'ref' to 'vec' in degrees, using atan2(cross, dot).
@@ -43,10 +43,10 @@ def _signed_angle_deg(ref: Tuple[float, float], vec: Tuple[float, float]) -> Opt
     if nr == 0 or nv == 0:
         return None
 
-    rx, ry = ref[0] / nr, ref[1] / nr
-    vx, vy = vec[0] / nv, vec[1] / nv
+    rx, ry = ref[0] / nr, ref[1] / nr # normalize reference
+    vx, vy = vec[0] / nv, vec[1] / nv # normalize vector
 
-    dot = rx * vx + ry * vy
+    dot = rx * vx + ry * vy  
     cross_z = rx * vy - ry * vx
     return math.degrees(math.atan2(cross_z, dot))
 
@@ -63,7 +63,7 @@ class AngleAnalyzer:
         -> standing again (knee_angle >= top_knee_deg) for enough frames
         => rep + 1
     """
-
+    
     def __init__(
         self,
         hip_id: int,
@@ -73,7 +73,7 @@ class AngleAnalyzer:
         floor_id2: int,
         require_all_markers: bool = True,
 
-        # --- Standing threshold (still knee-based) ---
+        # --- Standing threshold (knee-based) ---
         top_knee_deg: float = 165.0,
 
         # --- Rep counting parameters ---
@@ -97,26 +97,29 @@ class AngleAnalyzer:
         self._below_counter = 0
         self._above_counter = 0
 
-    def reset(self) -> None:
+    def reset(self) -> None:        # reset rep counting
         self.state = "above"
         self.rep_count = 0
         self._below_counter = 0
         self._above_counter = 0
 
-    def update(self, markers: Dict[int, Dict[str, Any]]) -> AngleResult:
+    def update(self, markers: Dict[int, Dict[str, Any]]) -> AngleResult:        # process one frame's markers
         missing = [mid for mid in (self.hip_id, self.knee_id, self.ankle_id) if mid not in markers]
         if missing:
             status = f"Missing markers: {missing}"
             return AngleResult(None, None, self.rep_count, False, self.state, status)
 
+        # centering markers 
         hip = markers[self.hip_id]["center"]
         knee = markers[self.knee_id]["center"]
         ankle = markers[self.ankle_id]["center"]
 
+        # convert to float tuples
         hip = (float(hip[0]), float(hip[1]))
         knee = (float(knee[0]), float(knee[1]))
         ankle = (float(ankle[0]), float(ankle[1]))
 
+        # compute vectors
         femur = _vec(hip, knee)      # hip -> knee
         tibia = _vec(ankle, knee)    # ankle -> knee
 
@@ -132,10 +135,19 @@ class AngleAnalyzer:
                 floor_dir = _vec(f1, f2)
                 floor_status = "floor:OK"
 
-        # Signed femur angle wrt floor (can be negative)
+
+        # --- Fix floor_dir orientation (consistent reference) ---
+        if floor_dir[0] < 0:
+            floor_dir = (-floor_dir[0], -floor_dir[1])
+
+        # --- Fix femur orientation (consistent femur direction along floor) ---
+        if femur[0] * floor_dir[0] + femur[1] * floor_dir[1] < 0:
+            femur = (-femur[0], -femur[1])
+                
+        # femur_angle (signed)
         femur_angle = _signed_angle_deg(floor_dir, femur)
 
-        # Knee angle stays unsigned (0..180)
+        # Knee angle (unsigned)
         knee_angle = _angle_deg(femur, tibia)
 
         if femur_angle is None or knee_angle is None:

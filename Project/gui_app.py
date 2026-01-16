@@ -1,9 +1,11 @@
 from logging import root
 import tkinter as tk
 from tkinter import ttk
+from unittest import result
 from PIL import Image, ImageTk
 import cv2
-
+import sound_utils
+from plot_angle import KneeAngleDashboard, FemurAngleDashboard
 
 class SquatApp(tk.Tk):
     """
@@ -13,12 +15,12 @@ class SquatApp(tk.Tk):
     - Start/Stop button (pauses processing but keeps showing frames)
     """
 
-    def __init__(self, camera, analyzer, sound_module, fps: int = 30):
+    def __init__(self, camera, analyzer, sound_utils, fps: int = 30):
         super().__init__()
         self.title("Squat Angle Analyzer")
         self.camera = camera
         self.analyzer = analyzer
-        self.sound_module = sound_module
+        self.sound_module = sound_utils
 
         self.delay_ms = max(1, int(1000 / fps))
         self.running = True
@@ -44,6 +46,9 @@ class SquatApp(tk.Tk):
 
         ttk.Label(root, textvariable=self.rep_var, font=("Arial", 16)).grid(row=2, column=0, sticky="w", pady=(5, 0))
 
+        # Knee angle dashboard
+        self.knee_dashboard = KneeAngleDashboard(self, max_points=300, refresh_ms=100)
+        self.femur_dashboard = FemurAngleDashboard(self, max_points=300, refresh_ms=100)
 
         # Controls 
         self.start_stop_btn = ttk.Button(root, text="Pause", command=self.toggle_running) 
@@ -52,6 +57,10 @@ class SquatApp(tk.Tk):
         self.reset_btn.grid(row=3, column=1, sticky="w", pady=10) 
         self.quit_btn = ttk.Button(root, text="Quit", command=self.on_close) 
         self.quit_btn.grid(row=3, column=2, sticky="e", pady=10)
+        self.show_plot_btn = ttk.Button(root, text="Show Knee Plot", command=self.knee_dashboard.show)
+        self.show_plot_btn.grid(row=4, column=0, sticky="w", pady=5)
+        self.show_femur_plot_btn = ttk.Button(root, text="Show Femur Plot", command=self.femur_dashboard.show)
+        self.show_femur_plot_btn.grid(row=4, column=1, sticky="w", pady=5)
 
 
         # Stretching
@@ -65,6 +74,8 @@ class SquatApp(tk.Tk):
 
         # Start loop
         self.after(self.delay_ms, self.update_loop)
+
+      
 
     def toggle_running(self):
         self.running = not self.running
@@ -82,13 +93,16 @@ class SquatApp(tk.Tk):
         if frame is not None:
             if self.running:
                 result = self.analyzer.update(markers)
+                if result.knee_angle_deg and result.femur_angle_deg is not None:
+                    self.knee_dashboard.add_sample(result.knee_angle_deg)
+                    self.femur_dashboard.add_sample(result.femur_angle_deg)
 
-                                # Sound bei neuer Rep
+                # Sound for new Rep
                 if result.new_rep:
                     self.sound_module.play_valid_squat_sound()
 
                 self.rep_var.set(f"Reps: {result.rep_count}")
-                
+
 
 
                 # ---------- VECTOR VISUALIZATION ----------
@@ -149,7 +163,7 @@ class SquatApp(tk.Tk):
                         )
 
 
-                # Floor vector: Floor1 -> Floor2 (if available)
+                # Floor vector: Floor1 -> Floor2
                 fid1 = self.analyzer.floor_id1
                 fid2 = self.analyzer.floor_id2
 

@@ -7,7 +7,6 @@ from gui_app import SquatApp
 def main():
     cam = Camera(camera_index=0)
 
-    # NOTE: hip_id MUST match one of your 4 ArUco marker IDs
     analyzer = AngleAnalyzer(
     hip_id=39,
     knee_id=40,
