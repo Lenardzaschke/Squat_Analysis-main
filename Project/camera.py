@@ -3,7 +3,7 @@ import cv2
 import numpy as np
 
 class Camera:
-    def __init__(self, camera_index=0):
+    def __init__(self, camera_index=1):
         #open camera
         self.cap = cv2.VideoCapture(camera_index)
         if not self.cap.isOpened():
@@ -15,12 +15,6 @@ class Camera:
         self.detector = cv2.aruco.ArucoDetector(self.aruco_dict, self.parameters)
 
     def get_frame_and_markers(self):
-        """reads picture and detects aruko code.
-
-        Returns:
-            frame: BGR-Frame (np.ndarray) or None, if no Frame.
-            markers: dict {marker_id: {"center": (cx, cy), "corners": corners_4x2}}
-        """
         ret, frame = self.cap.read()
         if not ret:
             return None, {}
@@ -34,7 +28,12 @@ class Camera:
         markers = {}
 
         if ids is not None:
-            ids = ids.flatten()
+            # OpenCV expects ids as int32 with shape (N, 1) for drawing
+            ids = ids.flatten().astype(np.int32)
+
+            # Draw all detected markers once per frame (more stable than per-marker calls)
+            cv2.aruco.drawDetectedMarkers(frame, corners, ids.reshape(-1, 1))
+
             for i, marker_id in enumerate(ids):
                 pts = corners[i][0]         # shape (4, 2)
                 cx = int(np.mean(pts[:, 0]))
@@ -45,8 +44,7 @@ class Camera:
                     "corners": pts
                 }
 
-                # Optional: Marker ins Bild einzeichnen
-                cv2.aruco.drawDetectedMarkers(frame, [corners[i]], np.array([[marker_id]]))
+                # draw Markers center and id
                 cv2.circle(frame, (cx, cy), 5, (0, 255, 0), -1)
                 cv2.putText(frame, str(marker_id), (cx, cy - 10),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
