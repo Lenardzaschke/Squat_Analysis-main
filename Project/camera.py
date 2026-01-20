@@ -9,7 +9,7 @@ class Camera:
         if not self.cap.isOpened():
             raise RuntimeError("Cannot open camera")
 
-        # ArUco-Setup (wie im Beispiel: 6x6_250)
+        # ArUco-Setup 
         self.aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_6X6_250)
         self.parameters = cv2.aruco.DetectorParameters()
         self.detector = cv2.aruco.ArucoDetector(self.aruco_dict, self.parameters)
@@ -31,7 +31,7 @@ class Camera:
             # OpenCV expects ids as int32 with shape (N, 1) for drawing
             ids = ids.flatten().astype(np.int32)
 
-            # Draw all detected markers once per frame (more stable than per-marker calls)
+            # Draw all detected markers once per frame
             cv2.aruco.drawDetectedMarkers(frame, corners, ids.reshape(-1, 1))
 
             for i, marker_id in enumerate(ids):
