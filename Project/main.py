@@ -1,0 +1,23 @@
+# main.py
+from camera import Camera
+from analysis import AngleAnalyzer
+import sound_utils
+from gui_app import SquatApp
+
+def main():
+    cam = Camera(camera_index=1)
+
+    analyzer = AngleAnalyzer(
+    hip_id=39,
+    knee_id=40,
+    ankle_id=42,
+    floor_id=41,
+    bar_id=38,
+    require_all_markers=True
+    )
+
+    app = SquatApp(cam, analyzer, sound_utils, fps=30)
+    app.mainloop()
+
+if __name__ == "__main__":
+    main()
